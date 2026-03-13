@@ -30,7 +30,7 @@ Your objective will be to teach an agent how to drive on a highway, among many c
 
 ### Roadmap
 - 📆 **23 Feb**: your groups are all complete.
-- 📆 **25 March** : Deadline for the report (5-10 pages) and code (notebook / script)
+- 📆 **20 March** : Deadline for the report (5-10 pages) and code (notebook / script)
 
 
 
