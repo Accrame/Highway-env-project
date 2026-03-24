@@ -209,6 +209,6 @@ __marimo__/
 # RL training artifacts
 models/
 logs/
-highway_tb/
+highway/
 videos/*.mp4
 !videos/random-agent_90_steps.mp4
