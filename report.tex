@@ -1,0 +1,242 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{parskip}
+
+\hypersetup{colorlinks=true, linkcolor=blue, urlcolor=blue, citecolor=blue}
+
+\title{\textbf{Reinforcement Learning for Autonomous Highway Driving}\\[0.3cm]
+\large Reinforcement Learning -- BDML 2025-2026 -- EFREI Paris}
+\author{Akram BOUDOUAOUR \and Nassim ISSAD}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Introduction}
+
+This report presents our approach to training autonomous driving agents in the Highway-env simulator using reinforcement learning. The objective is to teach an agent to navigate a three-lane highway among 40 aggressive vehicles without crashing.
+
+We implemented and compared three algorithms:
+\begin{enumerate}
+    \item \textbf{DQN} (Deep Q-Network) using Stable-Baselines3
+    \item \textbf{PPO} (Proximal Policy Optimization) using Stable-Baselines3
+    \item \textbf{Hand-coded DQN} implemented from scratch with PyTorch
+\end{enumerate}
+
+All agents are evaluated on the same challenging configuration: 3 lanes, 40 aggressive vehicles, tight initial spacing (0.1), and a 40-second episode duration.
+
+\section{Environment}
+
+\subsection{Highway-env}
+
+Highway-env \cite{leurent2018} is a collection of driving environments for reinforcement learning built on top of Gymnasium. The \texttt{highway-v0} environment simulates a multi-lane highway where the ego vehicle must navigate among other vehicles.
+
+\subsection{Action Space}
+
+The action space is \textbf{discrete} with 5 meta-actions:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{cl}
+\toprule
+\textbf{Action} & \textbf{Description} \\
+\midrule
+0 & Change lane to the left \\
+1 & Idle (maintain course and speed) \\
+2 & Change lane to the right \\
+3 & Accelerate \\
+4 & Decelerate \\
+\bottomrule
+\end{tabular}
+\caption{Discrete action space of Highway-env.}
+\end{table}
+
+\subsection{Observation Space}
+
+The observation is a \textbf{kinematics matrix} of shape $(5 \times 5)$, where each row represents a nearby vehicle (the ego vehicle + 4 closest neighbours). The five columns encode: \textit{presence} (whether the vehicle exists), \textit{x} (longitudinal position), \textit{y} (lateral position), \textit{vx} (longitudinal velocity), and \textit{vy} (lateral velocity). All values are normalised.
+
+\subsection{Reward Function}
+
+The default reward at each timestep is:
+\[
+R = r_{\text{collision}} \cdot \mathbb{1}_{\text{crashed}} + r_{\text{speed}} \cdot \frac{v - v_{\min}}{v_{\max} - v_{\min}}
+\]
+where $r_{\text{collision}} = -1$ and $r_{\text{speed}} = 0.4$ by default. The agent is rewarded for driving fast and penalised for collisions, which also terminate the episode.
+
+\subsection{Evaluation Configuration}
+
+The evaluation configuration is deliberately challenging:
+\begin{itemize}[nosep]
+    \item 40 vehicles with aggressive driving behaviour (\texttt{AggressiveVehicle})
+    \item Tight initial spacing (0.1), creating dense traffic
+    \item Duration: 40 seconds
+\end{itemize}
+
+\section{Algorithms}
+
+\subsection{DQN -- Stable-Baselines3}
+
+Deep Q-Network \cite{mnih2015} is a value-based algorithm that learns the optimal action-value function $Q^*(s, a)$ using a neural network.
+
+\textbf{Key components:}
+\begin{itemize}[nosep]
+    \item \textbf{Experience Replay}: transitions $(s, a, r, s', d)$ are stored in a buffer and sampled in random mini-batches to break temporal correlations.
+    \item \textbf{Target Network}: a periodically-synced copy of the Q-network provides stable TD targets: $y = r + \gamma \max_{a'} Q_{\text{target}}(s', a')$.
+    \item \textbf{Epsilon-greedy exploration}: with probability $\epsilon$, the agent selects a random action; otherwise it selects $\arg\max_a Q(s, a)$.
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lc}
+\toprule
+\textbf{Parameter} & \textbf{Value} \\
+\midrule
+Learning rate & $5 \times 10^{-4}$ \\
+Buffer size & 50,000 \\
+Batch size & 64 \\
+Discount factor ($\gamma$) & 0.99 \\
+Target update interval & 500 \\
+Exploration fraction & 0.3 \\
+Final $\epsilon$ & 0.05 \\
+Network architecture & [256, 256] \\
+Total timesteps & 100,000 \\
+\bottomrule
+\end{tabular}
+\caption{DQN (SB3) hyperparameters.}
+\end{table}
+
+\subsection{PPO -- Stable-Baselines3}
+
+Proximal Policy Optimization \cite{schulman2017} is a policy-gradient algorithm that directly optimises the policy $\pi_\theta(a|s)$.
+
+\textbf{Key components:}
+\begin{itemize}[nosep]
+    \item \textbf{Clipped surrogate objective}: the policy update is constrained to prevent destructively large updates:
+    \[
+    L^{\text{CLIP}}(\theta) = \mathbb{E}\!\left[\min\!\left(r_t(\theta)\,\hat{A}_t,\ \text{clip}\!\left(r_t(\theta),\, 1{-}\epsilon,\, 1{+}\epsilon\right)\hat{A}_t\right)\right]
+    \]
+    where $r_t(\theta) = \frac{\pi_\theta(a_t|s_t)}{\pi_{\theta_{\text{old}}}(a_t|s_t)}$ is the probability ratio.
+    \item \textbf{Generalised Advantage Estimation (GAE)}: reduces variance in advantage estimates using an exponentially-weighted sum of TD residuals.
+    \item \textbf{On-policy}: collects fresh rollouts each iteration (no replay buffer needed).
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lc}
+\toprule
+\textbf{Parameter} & \textbf{Value} \\
+\midrule
+Learning rate & $3 \times 10^{-4}$ \\
+Rollout steps ($n_{\text{steps}}$) & 256 \\
+Batch size & 64 \\
+Number of epochs & 10 \\
+Discount factor ($\gamma$) & 0.99 \\
+GAE $\lambda$ & 0.95 \\
+Clip range ($\epsilon$) & 0.2 \\
+Entropy coefficient & 0.01 \\
+Network architecture & [256, 256] \\
+Total timesteps & 100,000 \\
+\bottomrule
+\end{tabular}
+\caption{PPO (SB3) hyperparameters.}
+\end{table}
+
+\subsection{Hand-coded DQN -- From Scratch (PyTorch)}
+
+To demonstrate a deeper understanding of DQN, we implemented the algorithm entirely from scratch using PyTorch.
+
+\textbf{Implementation details:}
+\begin{enumerate}[nosep]
+    \item \textbf{QNetwork}: a feedforward neural network with two hidden layers of 256 units and ReLU activations, mapping the flattened observation (25 features) to Q-values for each of the 5 actions.
+    \item \textbf{ReplayBuffer}: a circular buffer (capacity 50,000) storing transitions and supporting uniform random sampling.
+    \item \textbf{Training loop}: at each step, the agent selects an action via epsilon-greedy, stores the transition, samples a mini-batch, and minimises the TD loss:
+    \[
+    L = \frac{1}{N}\sum_{i=1}^{N}\left(Q(s_i, a_i) - \left[r_i + \gamma \max_{a'} Q_{\text{target}}(s_i', a')\right]\right)^2
+    \]
+    \item \textbf{Epsilon schedule}: linear decay from 1.0 to 0.05 over 40,000 steps.
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lc}
+\toprule
+\textbf{Parameter} & \textbf{Value} \\
+\midrule
+Learning rate & $5 \times 10^{-4}$ \\
+Discount factor ($\gamma$) & 0.99 \\
+Epsilon decay steps & 40,000 \\
+Target update frequency & 500 steps \\
+Batch size & 64 \\
+Training episodes & 800 \\
+\bottomrule
+\end{tabular}
+\caption{Hand-coded DQN hyperparameters.}
+\end{table}
+
+\section{Results and Comparison}
+
+\subsection{Training}
+
+All three models were trained on a simplified configuration (30 vehicles, default behaviour, faster simulation) to accelerate training, then evaluated on the full challenging evaluation configuration.
+
+The hand-coded DQN training curves show clear learning: the smoothed episode reward rises from approximately 15 to 50 over 800 episodes, while the epsilon schedule drives exploration from 1.0 down to 0.05. The training loss initially increases as the network encounters more diverse experiences, then fluctuates as is typical for DQN.
+
+\subsection{Evaluation Results}
+
+All models were evaluated over 30 episodes on the challenging configuration (40 aggressive vehicles, tight spacing):
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Algorithm} & \textbf{Mean Reward} & \textbf{Mean Episode Length} \\
+\midrule
+DQN (SB3) & 6.57 & 7.73 \\
+PPO (SB3) & 6.74 & 8.70 \\
+\textbf{Hand-coded DQN} & \textbf{27.58} & \textbf{38.93} \\
+\bottomrule
+\end{tabular}
+\caption{Evaluation results on the challenging configuration (30 episodes).}
+\end{table}
+
+\subsection{Analysis}
+
+\textbf{The hand-coded DQN significantly outperforms both SB3 models.} Several factors explain this gap:
+
+\begin{enumerate}
+    \item \textbf{Training duration}: the hand-coded DQN trained for 800 full episodes (over 40,000 environment steps with complete episode rollouts), accumulating more diverse experience than the SB3 models which shared 100,000 timesteps across 4 parallel environments.
+
+    \item \textbf{Single-environment training}: the hand-coded DQN trained sequentially on a single environment, providing more coherent learning signals. The SB3 models mix experience from 4 concurrent environments in their replay buffer, which can introduce noise for this task.
+
+    \item \textbf{Discount factor}: we used $\gamma = 0.99$ for all models. This high discount factor was well-suited for the hand-coded implementation where episodes ran longer during training. The SB3 models, with shorter effective episodes, may have benefited from a lower gamma (e.g., 0.8) to focus on immediate crash avoidance.
+\end{enumerate}
+
+\textbf{DQN vs PPO (SB3):} both library-based models performed similarly (6.57 vs 6.74 mean reward), with PPO showing a marginal advantage. Neither model had sufficient training to handle the aggressive evaluation environment effectively.
+
+\section{Conclusion}
+
+Our experiments demonstrate that a carefully implemented DQN from scratch can outperform library-based implementations when given sufficient training time and appropriate hyperparameters. The hand-coded DQN achieved a mean reward of \textbf{27.58} on the challenging evaluation configuration, surviving an average of \textbf{39 steps} compared to fewer than 9 for the SB3 models.
+
+Key takeaways:
+\begin{itemize}[nosep]
+    \item Hyperparameter tuning and training duration matter more than algorithm choice for this environment.
+    \item Implementing DQN from scratch provides full control over the training pipeline and deeper understanding of the algorithm's behaviour.
+    \item Future improvements could explore reward shaping (penalising collisions more heavily to encourage defensive driving), Double DQN, Dueling architectures, or curriculum learning with progressively more aggressive traffic.
+\end{itemize}
+
+\begin{thebibliography}{9}
+\bibitem{leurent2018} Leurent, E. (2018). \textit{An Environment for Autonomous Driving Decision-Making}. GitHub: highway-env.
+\bibitem{mnih2015} Mnih, V. et al. (2015). \textit{Human-level control through deep reinforcement learning}. Nature, 518(7540), 529--533.
+\bibitem{schulman2017} Schulman, J. et al. (2017). \textit{Proximal Policy Optimization Algorithms}. arXiv:1707.06347.
+\end{thebibliography}
+
+\end{document}
